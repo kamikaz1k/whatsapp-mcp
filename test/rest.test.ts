@@ -48,6 +48,15 @@ function fakeAccount(overrides: Partial<ApiAccount> = {}) {
     markRead: record("markRead", Promise.resolve(3)),
     markMessageRead: record("markMessageRead", Promise.resolve(GROUP)),
     setPresence: record("setPresence", Promise.resolve()),
+    react: record("react", Promise.resolve()),
+    downloadMedia: record(
+      "downloadMedia",
+      Promise.resolve({
+        bytes: new Uint8Array([37, 80, 68, 70]),
+        mimetype: "application/pdf",
+        fileName: "Proposta comercial.pdf",
+      }),
+    ),
     getGroupInfo: record(
       "getGroupInfo",
       Promise.resolve({
@@ -128,6 +137,36 @@ describe("REST API", () => {
     expect(await jsonOf(response)).toEqual({ chat_jid: GROUP, id: "IN" })
     expect(argsOf(calls, "markMessageRead")).toEqual([GROUP, "IN"])
     expect((await call(account, "GET", `/messages/${GROUP}/IN/read`)).status).toBe(405)
+  })
+
+  test("reacts to a message, and an empty emoji takes the reaction away", async () => {
+    const { account, calls } = fakeAccount()
+    const response = await call(account, "PUT", `/messages/${GROUP}/IN/reaction`, { emoji: "👍" })
+    expect(response.status).toBe(204)
+    expect(argsOf(calls, "react")).toEqual([GROUP, "IN", "👍"])
+    expect(
+      (await call(account, "PUT", `/messages/${GROUP}/IN/reaction`, { emoji: "" })).status,
+    ).toBe(204)
+    expect((await call(account, "PUT", `/messages/${GROUP}/IN/reaction`, {})).status).toBe(400)
+  })
+
+  test("serves a message's file with its type and the name it was sent with", async () => {
+    const { account, calls } = fakeAccount()
+    const response = await call(account, "GET", `/messages/${GROUP}/DOC/media`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("application/pdf")
+    expect(response.headers.get("content-disposition")).toBe(
+      "attachment; filename*=UTF-8''Proposta%20comercial.pdf",
+    )
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70]))
+    expect(argsOf(calls, "downloadMedia")).toEqual([GROUP, "DOC"])
+
+    const { account: textOnly } = fakeAccount({
+      downloadMedia: () => Promise.reject(new RequestError(409, "no_media", "no media")),
+    })
+    const refused = await call(textOnly, "GET", `/messages/${GROUP}/TXT/media`)
+    expect(refused.status).toBe(409)
+    expect(await jsonOf(refused)).toEqual({ error: "no media", code: "no_media" })
   })
 
   test("a refusal keeps its status and code", async () => {

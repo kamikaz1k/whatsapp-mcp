@@ -26,6 +26,8 @@ export type ErrorCode =
   | "message_not_found"
   | "not_own_message"
   | "edit_window_closed"
+  | "no_media"
+  | "media_too_large"
   | "not_connected"
   | "whatsapp_error"
   | "internal"

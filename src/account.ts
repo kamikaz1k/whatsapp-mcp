@@ -28,10 +28,11 @@ import {
   type SearchHit,
   type SearchQuery,
 } from "./store/archive"
+import type { MediaFile } from "./bytes"
 import { durableKvStore } from "./store/durable-kv"
 import type { Identity } from "./store/names"
 import { type ReadMessage, speechFromEnv, voiceTranscripts } from "./transcribe"
-import { type MediaView, mediaViewer, visionFromEnv } from "./view-media"
+import { documentsFromEnv, type MediaView, mediaViewer, visionFromEnv } from "./view-media"
 import { fetchWaWebVersion } from "./wa-version"
 import { type ContactName, removeContact, resolveAddress, saveContact } from "./whatsapp/contacts"
 import { whatsappMedia } from "./whatsapp/media"
@@ -85,6 +86,9 @@ const PRUNE_EVERY_MS = 60 * 60 * 1000
 export const EDIT_WINDOW_SECONDS = 15 * 60
 // How long a group's addressing mode is trusted before it is asked again.
 const ADDRESSING_TTL_MS = 10 * 60 * 1000
+// What GET /messages/:chat/:id/media serves at most; Durable Object responses stream, but WhatsApp's
+// download is buffered whole in memory first.
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 
 // The library types USync results as `unknown`.
 const AboutResult = z.object({ status: z.object({ status: z.string().nullish() }) })
@@ -141,6 +145,11 @@ export interface MessageData {
 }
 
 /** Who the linked number is, by every JID WhatsApp may use for it. */
+export interface DownloadedMedia extends MediaFile {
+  // The name a document was sent with; null for photos, videos and voice notes.
+  readonly fileName: string | null
+}
+
 export interface Me {
   readonly jid: string | null
   readonly lid: string | null
@@ -228,6 +237,7 @@ export class WhatsAppAccount extends DurableObject<Env> {
   })
   private readonly media = mediaViewer({
     vision: visionFromEnv(this.env),
+    documents: documentsFromEnv(this.env),
     transcripts: this.transcripts,
     fetchMedia: (message) => this.files.fetch(message),
     thumbnail: (message) => this.files.thumbnail(message),
@@ -354,6 +364,28 @@ export class WhatsAppAccount extends DurableObject<Env> {
     const message = this.archive.getMessage(chat, id)
     if (!message) throw new Error(`message ${id} not found in ${chat}`)
     return this.media.view(message)
+  }
+
+  /**
+   * The file one message carries: an image, video, voice note, sticker or document, with the name
+   * a document was sent with. View-once media is refused, as for view_media.
+   */
+  async downloadMedia(chatJid: string, id: string): Promise<DownloadedMedia> {
+    const chat = this.resolveChat(chatJid)
+    const message = this.archive.getMessage(chat, id)
+    if (!message)
+      throw new RequestError(404, "message_not_found", `message ${id} not found in ${chat}`)
+    if (!message.media) throw new RequestError(409, "no_media", `message ${id} carries no media`)
+    const size = message.media.bytes ?? 0
+    if (size > MAX_MEDIA_BYTES) {
+      throw new RequestError(
+        413,
+        "media_too_large",
+        `the file has ${size} bytes, more than the ${MAX_MEDIA_BYTES} served`,
+      )
+    }
+    const file = await this.files.fetch(message)
+    return { ...file, fileName: message.media.fileName }
   }
 
   searchMessages(query: SearchQuery): SearchHit[] {

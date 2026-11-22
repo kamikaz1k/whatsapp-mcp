@@ -4,6 +4,7 @@
 import { z } from "zod"
 
 import type {
+  DownloadedMedia,
   GroupInfo,
   Me,
   MessageData,
@@ -26,6 +27,8 @@ export interface ApiAccount {
   listChats(query: ChatListQuery): ChatSummary[]
   markRead(chatJid: string): Promise<number>
   markMessageRead(chatJid: string, messageId: string): Promise<string>
+  react(chatJid: string, messageId: string, emoji: string): Promise<void>
+  downloadMedia(chatJid: string, messageId: string): Promise<DownloadedMedia>
   setPresence(chatJid: string, state: Presence): Promise<void>
   getGroupInfo(groupJid: string): Promise<GroupInfo>
 }
@@ -55,6 +58,9 @@ const SendBody = z.object({
 const EditBody = z.object({ text: z.string().min(1).max(65_536) })
 
 const PresenceBody = z.object({ state: z.enum(["typing", "recording", "paused"]) })
+
+// An empty emoji takes this account's reaction away.
+const ReactionBody = z.object({ emoji: z.string().max(16) })
 
 const ChatsQuery = z.object({
   type: z.enum(["group", "direct"]).optional(),
@@ -104,8 +110,17 @@ function routesFor(segments: readonly string[]): Record<string, Route> | null {
       return { GET: async (account) => Response.json(presentMe(account.me())) }
     case "messages":
       if (segments.length === 1) return { POST: sendMessage }
-      if (segments.length === 4 && a && b && segments[3] === "read") {
-        return { POST: (account) => markMessageRead(account, a, b) }
+      if (segments.length === 4 && a && b) {
+        switch (segments[3]) {
+          case "read":
+            return { POST: (account) => markMessageRead(account, a, b) }
+          case "reaction":
+            return { PUT: (account, request) => react(account, a, b, request) }
+          case "media":
+            return { GET: (account) => downloadMedia(account, a, b) }
+          default:
+            return null
+        }
       }
       if (segments.length !== 3 || !a || !b) return null
       return {
@@ -240,6 +255,33 @@ async function setPresence(account: ApiAccount, chat: string, request: Request):
 
 async function markMessageRead(account: ApiAccount, chat: string, id: string): Promise<Response> {
   return Response.json({ chat_jid: await account.markMessageRead(chat, id), id })
+}
+
+async function react(
+  account: ApiAccount,
+  chat: string,
+  id: string,
+  request: Request,
+): Promise<Response> {
+  const body = await parseBody(request, ReactionBody)
+  await account.react(chat, id, body.emoji)
+  return new Response(null, { status: 204 })
+}
+
+// The file itself, with its type and, for a document, the name it was sent with.
+async function downloadMedia(account: ApiAccount, chat: string, id: string): Promise<Response> {
+  const file = await account.downloadMedia(chat, id)
+  const headers = new Headers({
+    "content-type": file.mimetype,
+    "content-length": String(file.bytes.length),
+  })
+  if (file.fileName) {
+    headers.set(
+      "content-disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    )
+  }
+  return new Response(file.bytes, { headers })
 }
 
 async function markRead(account: ApiAccount, chat: string): Promise<Response> {

@@ -17,6 +17,8 @@ export interface ShownImage extends MediaFile {
 export interface MediaView {
   readonly message: ReadMessage
   readonly image: ShownImage | null
+  // The text of a document that isn't an image, such as a PDF or a spreadsheet, as Markdown.
+  readonly text?: string
   // Why the original image is not shown.
   readonly notice?: string
   readonly descriptionStatus?: DescriptionStatus
@@ -26,9 +28,14 @@ export interface MediaView {
 // What an image shows and the text in it. "" when there is nothing to say.
 export type Vision = (image: MediaFile) => Promise<string>
 
+// A document's text as Markdown: a PDF, a Word file, a spreadsheet.
+export type DocumentReader = (file: MediaFile & { readonly name: string }) => Promise<string>
+
 export interface MediaViewerDeps {
   // Null when descriptions are off, or a message that says how to fix the configuration.
   readonly vision: Vision | null | string
+  // Null where documents are not read.
+  readonly documents?: DocumentReader | null
   readonly transcripts: VoiceTranscripts
   fetchMedia(message: ArchivedMessage): Promise<MediaFile>
   // The JPEG preview inside the message, null when it has none.
@@ -48,6 +55,9 @@ const WAIT_MS = 15_000
 const MAX_SHOWN_BYTES = 3_750_000
 // Durable Object RPC carries at most 32 MiB.
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+// Characters of a document's text shown, and kept as its description for search.
+const MAX_DOCUMENT_CHARS = 30_000
+const MAX_KEPT_CHARS = 8_000
 
 type Described = Pick<MediaView, "message" | "descriptionStatus" | "descriptionError">
 
@@ -120,6 +130,21 @@ export function mediaViewer(deps: MediaViewerDeps): MediaViewer {
     }
   }
 
+  async function viewDocument(message: ArchivedMessage, read: DocumentReader): Promise<MediaView> {
+    const file = await download(message)
+    const text = (await read({ ...file, name: message.media?.fileName ?? "document" })).trim()
+    if (message.description === null && text !== "") {
+      deps.saveDescription(message, text.slice(0, MAX_KEPT_CHARS))
+    }
+    if (text.length <= MAX_DOCUMENT_CHARS) return { message, image: null, text }
+    return {
+      message,
+      image: null,
+      text: text.slice(0, MAX_DOCUMENT_CHARS),
+      notice: `the document's text was cut at ${MAX_DOCUMENT_CHARS} of its ${text.length} characters`,
+    }
+  }
+
   return {
     async view(message) {
       switch (message.kind) {
@@ -140,7 +165,8 @@ export function mediaViewer(deps: MediaViewerDeps): MediaViewer {
           return viewImage(message, false)
         case "document":
           if (isImageDocument(message)) return viewImage(message, true)
-          throw new Error("only image documents can be viewed")
+          if (deps.documents) return viewDocument(message, deps.documents)
+          throw new Error("documents are not read on this server")
         default:
           throw new Error(`a ${message.kind} message has no media to view`)
       }
@@ -195,6 +221,19 @@ export function describePrompt(language: string | null): string {
     "Start with one or two sentences saying what the image is and what it shows.",
     "Then copy every readable piece of text exactly as written. No preamble, no markdown.",
   ].join(" ")
+}
+
+/** A document's text through Workers AI's toMarkdown, which reads PDF, Office files, HTML and CSV. */
+export function documentsFromEnv(env: { readonly AI: Ai }): DocumentReader {
+  return async (file) => {
+    const converted = await env.AI.toMarkdown({
+      name: file.name,
+      blob: new Blob([file.bytes], { type: file.mimetype }),
+    })
+    if (converted.format === "error")
+      throw new Error(`could not read the document: ${converted.error}`)
+    return converted.data
+  }
 }
 
 interface DescribeEnv {

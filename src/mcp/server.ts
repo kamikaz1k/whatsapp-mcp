@@ -21,7 +21,7 @@ Reading comes from the account's archive, which holds what WhatsApp synced at pa
 
 Voice and audio messages carry a transcript once transcribed. get_messages and get_message_context transcribe the ones they return (up to 10 per call, newest first) and save the text, so later reads and search_messages have it. transcript_status explains a missing one: "pending" is still running (read again in a few seconds), "not_requested" was left out (narrow the read or use get_message_context), "unavailable" failed with transcript_error, "no_speech" means nothing was said. Pass transcribe: false to read without transcribing.
 
-Reads show images, stickers, videos and documents only by their caption and size. Call view_media to see one. It returns the image as WhatsApp sent it, or the preview inside the message for a video. The first view of an image also saves a description of what it shows and the text in it. Later reads carry it as description, and search_messages finds it.
+Reads show images, stickers, videos and documents only by their caption and size. Call view_media to see one. It returns the image as WhatsApp sent it, the preview inside the message for a video, or a document's text as Markdown. The first view of an image also saves a description of what it shows and the text in it, and of a document the start of its text. Later reads carry it as description, and search_messages finds it.
 
 Times are shown in the account's time zone as "YYYY-MM-DD HH:mm". Date filters accept the same format, a bare date, or ISO 8601 with an offset.
 
@@ -111,6 +111,7 @@ function presentView(view: MediaView, timeZone: string): CallToolResult {
   const details = withoutNulls({
     message: presentMessage(view.message, timeZone),
     image: view.image?.source ?? null,
+    text: view.text ?? null,
     notice: view.notice ?? null,
     description_status: view.descriptionStatus ?? null,
     description_error: view.descriptionError ?? null,
@@ -336,7 +337,7 @@ export function createServer(account: Account, options: ServerOptions): McpServe
     {
       title: "View media",
       description:
-        "The media in one message: an image or sticker as WhatsApp sent it, the preview inside a video, or the transcript of a voice or audio message. The first view of an image saves a description (a vision-model call) that later reads and search show.",
+        "The media in one message: an image or sticker as WhatsApp sent it, the preview inside a video, the transcript of a voice or audio message, or the text of a document (PDF, Word, Excel, CSV) as Markdown. The first view of an image saves a description (a vision-model call), and of a document the start of its text, that later reads and search show.",
       inputSchema: z.object({ chat, message_id: messageId }),
       annotations: LIVE_READ,
     },

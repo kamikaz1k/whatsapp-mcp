@@ -23,6 +23,20 @@ function image(id: string, overrides: Partial<ArchivedMessage> = {}): ArchivedMe
   })
 }
 
+function pdf(id: string): ArchivedMessage {
+  return image(id, {
+    kind: "document",
+    media: {
+      mimetype: "application/pdf",
+      fileName: "a.pdf",
+      bytes: 10,
+      seconds: null,
+      width: null,
+      height: null,
+    },
+  })
+}
+
 // Every image file holds its message id. Records what was downloaded, described,
 // saved and left running in the background.
 function fakeAccount(
@@ -179,21 +193,26 @@ describe("view media", () => {
     expect(view).toMatchObject({ image: null, message: { transcript: "hello" } })
   })
 
-  test("a message without viewable media is refused", async () => {
-    const viewer = mediaViewer(fakeAccount().deps)
-    const pdf = image("PDF", {
-      kind: "document",
-      media: {
-        mimetype: "application/pdf",
-        fileName: "a.pdf",
-        bytes: 10,
-        seconds: null,
-        width: null,
-        height: null,
+  test("a document shows its text, and its first view keeps the start of it", async () => {
+    const account = fakeAccount()
+    const read: { name: string; mimetype: string }[] = []
+    const viewer = mediaViewer({
+      ...account.deps,
+      documents: async (file) => {
+        read.push({ name: file.name, mimetype: file.mimetype })
+        return "# Proposta\n\nValor: 30 mil"
       },
     })
+    const view = await viewer.view(pdf("PDF"))
 
-    for (const message of [pdf, archivedMessage("T", { kind: "text", text: "hi" })]) {
+    expect(read).toEqual([{ name: "a.pdf", mimetype: "application/pdf" }])
+    expect(view).toMatchObject({ image: null, text: "# Proposta\n\nValor: 30 mil" })
+    expect(account.saved.get("PDF")).toBe("# Proposta\n\nValor: 30 mil")
+  })
+
+  test("a message without viewable media is refused, and so is a document where none are read", async () => {
+    const viewer = mediaViewer(fakeAccount().deps)
+    for (const message of [pdf("PDF"), archivedMessage("T", { kind: "text", text: "hi" })]) {
       const failure = await viewer.view(message).catch((error: unknown) => error)
       expect(failure).toBeInstanceOf(Error)
     }
