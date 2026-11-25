@@ -28,6 +28,7 @@ export type ErrorCode =
   | "edit_window_closed"
   | "no_media"
   | "media_too_large"
+  | "invalid_image"
   | "not_connected"
   | "whatsapp_error"
   | "internal"

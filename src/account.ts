@@ -38,6 +38,7 @@ import { type ContactName, removeContact, resolveAddress, saveContact } from "./
 import { whatsappMedia } from "./whatsapp/media"
 import { decodeRaw, type KeyedMessage } from "./whatsapp/raw"
 import { type MentionTarget, mentionJid, mentionText } from "./whatsapp/mentions"
+import { outgoingContent } from "./whatsapp/outgoing"
 import { makeSocket, type Socket } from "./whatsapp/socket"
 import { type ArchiveChange, refreshGroupNames, syncArchive } from "./whatsapp/sync"
 import { type Attempt, drain, post } from "./webhooks/deliver"
@@ -118,9 +119,16 @@ export interface Overview extends AccountStatus {
   readonly archive: ArchiveStats
 }
 
+/** A photo to send inline; the request's text becomes its caption. */
+export interface OutgoingImage {
+  readonly bytes: Uint8Array
+  readonly mimetype: string
+}
+
 export interface SendRequest {
   readonly to: string
   readonly text: string
+  readonly image?: OutgoingImage | undefined
   readonly replyTo?: string | undefined
   readonly mentions?: readonly string[] | undefined
   readonly idempotencyKey?: string | undefined
@@ -202,6 +210,11 @@ function addressingOf(group: GroupMetadata): "lid" | "pn" {
 function numberOf(socket: Socket | null): string | null {
   const id = socket?.user?.id
   return id ? jidNormalizedUser(id) : null
+}
+
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
 async function digest(parts: readonly string[]): Promise<string> {
@@ -400,14 +413,19 @@ export class WhatsAppAccount extends DurableObject<Env> {
     const targets = await this.mentionTargets(chatJid, request.mentions ?? [])
     const mentions = targets.map((target) => target.jid)
     const text = mentionText(request.text, targets)
+    const image = request.image
+    const imageKey = image ? await digestBytes(image.bytes) : ""
     const requestKey =
-      request.idempotencyKey ?? (await digest([chatJid, text, request.replyTo ?? "", ...mentions]))
+      request.idempotencyKey ??
+      (await digest([chatJid, text, request.replyTo ?? "", imageKey, ...mentions]))
     const window = request.idempotencyKey ? EXPLICIT_DEDUP_SECONDS : IMPLICIT_DEDUP_SECONDS
     const previous = this.archive.findSend(requestKey, window)
     if (previous) return { chatJid, id: previous, deduplicated: true }
 
     const quoted = request.replyTo ? this.rawMessage(chatJid, request.replyTo) : undefined
-    const sent = await socket.sendMessage(chatJid, { text, mentions }, { quoted })
+    const sent = await socket.sendMessage(chatJid, outgoingContent(text, mentions, image), {
+      quoted,
+    })
     const id = sent?.key.id
     if (!id) throw new Error("WhatsApp did not return a message id")
     // The echo of the sent message is what makes `message.sent`.

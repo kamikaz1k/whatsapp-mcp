@@ -135,6 +135,8 @@ Want a bot in your group chat? It gets every message through a [webhook](#webhoo
 | `POST /chats/:chat/read`           | Marks the chat as read                                                   |
 | `GET /groups/:jid`                 | A group and its members, with their phone numbers                        |
 
+To send a photo inline, add `"image": { "base64": "<JPEG, PNG or WebP>" }` to `POST /messages`; `text` becomes its caption and may be left out. The type is read from the bytes, up to 16 MB. Workers have no image library, so the photo goes without a preview thumbnail and shows as it downloads.
+
 Each webhook message says whether it mentions you (`mentions_me`) or replies to you (`reply_to_me`), so your bot knows when to answer. To mention someone back, list their number in `mentions` and write `@<number>` in the text, and the server makes it a link in any group. Errors come as `{"error", "code"}`, and [ADR 0005](docs/adr/0005-rest-api-for-bots.md) explains the choices.
 
 ## How it works

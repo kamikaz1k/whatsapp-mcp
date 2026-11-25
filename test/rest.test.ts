@@ -120,6 +120,39 @@ describe("REST API", () => {
     })
   })
 
+  test("sends a photo with a caption, typed by its bytes", async () => {
+    const { account, calls } = fakeAccount()
+    const png = new Uint8Array(33)
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const base64 = btoa(String.fromCharCode(...png))
+    const response = await call(account, "POST", "/messages", {
+      to: GROUP,
+      text: "here",
+      image: { base64, mimetype: "image/jpeg" },
+      idempotency_key: "k1",
+    })
+    expect(response.status).toBe(201)
+    expect(argsOf(calls, "send")[0]).toMatchObject({
+      text: "here",
+      image: { bytes: png, mimetype: "image/png" },
+      idempotencyKey: "k1",
+    })
+  })
+
+  test("a photo needs no caption, but bytes that aren't an image are refused", async () => {
+    const { account } = fakeAccount()
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))
+    expect(
+      (await call(account, "POST", "/messages", { to: GROUP, image: { base64: png } })).status,
+    ).toBe(201)
+    const pdf = await call(account, "POST", "/messages", {
+      to: GROUP,
+      image: { base64: btoa("%PDF-1.7 ...") },
+    })
+    expect(pdf.status).toBe(400)
+    expect((await jsonOf(pdf)).code).toBe("invalid_image")
+  })
+
   test("edits a message under an encoded JID", async () => {
     const { account, calls } = fakeAccount()
     const response = await call(account, "PATCH", `/messages/${encodeURIComponent(GROUP)}/SENT`, {

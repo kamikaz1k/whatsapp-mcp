@@ -9,11 +9,13 @@ import type {
   Me,
   MessageData,
   MessagesData,
+  OutgoingImage,
   Presence,
   SendRequest,
   SendResult,
 } from "../account"
 import { errorText, RequestError, whatsappStatus } from "../errors"
+import { IMAGE_TYPES, sniffImageType } from "../whatsapp/outgoing"
 import type { ChatListQuery, ChatSummary, MessageQuery } from "../store/archive"
 import { isoTime } from "../webhooks/events"
 
@@ -47,13 +49,47 @@ const time = z
   .transform((value) => Math.floor(Date.parse(value) / 1000))
   .optional()
 
-const SendBody = z.object({
-  to: z.string().min(1),
-  text: z.string().min(1).max(65_536),
-  reply_to: z.string().min(1).optional(),
-  mentions: z.array(z.string().min(1)).max(256).optional(),
-  idempotency_key: z.string().min(1).max(200).optional(),
+/** A photo sent inline, as base64. 16 MB decoded is WhatsApp's limit for images. */
+const MAX_IMAGE_BYTES = 16 * 1024 * 1024
+
+const ImageBody = z.object({
+  base64: z
+    .string()
+    .min(1)
+    .max(Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4),
+  mimetype: z.enum(IMAGE_TYPES).optional(),
 })
+
+const SendBody = z
+  .object({
+    to: z.string().min(1),
+    // With `image`, the caption; it may then be empty.
+    text: z.string().max(65_536).default(""),
+    image: ImageBody.optional(),
+    reply_to: z.string().min(1).optional(),
+    mentions: z.array(z.string().min(1)).max(256).optional(),
+    idempotency_key: z.string().min(1).max(200).optional(),
+  })
+  .refine((body) => body.text.length > 0 || body.image !== undefined, {
+    message: "send text, an image, or both",
+    path: ["text"],
+  })
+
+function decodeImage(image: z.output<typeof ImageBody>): OutgoingImage {
+  let bytes: Uint8Array
+  try {
+    bytes = Uint8Array.from(atob(image.base64.replace(/^data:[^,]*,/, "")), (char) =>
+      char.charCodeAt(0),
+    )
+  } catch {
+    throw new RequestError(400, "invalid_image", "image.base64 is not valid base64")
+  }
+  const sniffed = sniffImageType(bytes)
+  if (!sniffed) {
+    throw new RequestError(400, "invalid_image", "the image is not a JPEG, PNG or WebP")
+  }
+  return { bytes, mimetype: sniffed }
+}
 
 const EditBody = z.object({ text: z.string().min(1).max(65_536) })
 
@@ -170,6 +206,7 @@ async function sendMessage(account: ApiAccount, request: Request): Promise<Respo
   const sent = await account.send({
     to: body.to,
     text: body.text,
+    image: body.image ? decodeImage(body.image) : undefined,
     replyTo: body.reply_to,
     mentions: body.mentions,
     idempotencyKey: body.idempotency_key,
