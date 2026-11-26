@@ -16,7 +16,7 @@ import type {
 } from "../account"
 import { errorText, RequestError, whatsappStatus } from "../errors"
 import { IMAGE_TYPES, sniffImageType } from "../whatsapp/outgoing"
-import type { ChatListQuery, ChatSummary, MessageQuery } from "../store/archive"
+import type { ChatListQuery, ChatSummary, MessageQuery, SearchQuery } from "../store/archive"
 import { isoTime } from "../webhooks/events"
 
 export interface ApiAccount {
@@ -26,6 +26,7 @@ export interface ApiAccount {
   deleteMessage(chatJid: string, messageId: string): Promise<void>
   readMessage(chatJid: string, id: string, transcribeVoice: boolean): Promise<MessageData | null>
   readMessages(query: MessageQuery, transcribeVoice: boolean): Promise<MessagesData>
+  searchChat(query: SearchQuery & { readonly chatJid: string }): MessagesData
   listChats(query: ChatListQuery): ChatSummary[]
   markRead(chatJid: string): Promise<number>
   markMessageRead(chatJid: string, messageId: string): Promise<string>
@@ -114,6 +115,14 @@ const MessagesQuery = z.object({
   transcribe_voice: flag,
 })
 
+const SearchParams = z.object({
+  q: z.string().trim().min(1).max(500),
+  since: time,
+  until: time,
+  sender: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+})
+
 const MessageQueryParams = z.object({ transcribe_voice: flag })
 
 type Route = (account: ApiAccount, request: Request, url: URL) => Promise<Response>
@@ -170,6 +179,8 @@ function routesFor(segments: readonly string[]): Record<string, Route> | null {
       switch (b) {
         case "messages":
           return { GET: (account, _request, url) => listMessages(account, a, url) }
+        case "search":
+          return { GET: (account, _request, url) => searchChat(account, a, url) }
         case "presence":
           return { POST: (account, request) => setPresence(account, a, request) }
         case "read":
@@ -282,6 +293,22 @@ async function listMessages(account: ApiAccount, chat: string, url: URL): Promis
     query.transcribe_voice ?? false,
   )
   return Response.json(found)
+}
+
+// Full-text search in one chat: every word must appear (prefix match, accents and case
+// ignored), best matches first. Each message carries a `snippet` with hits in [brackets].
+async function searchChat(account: ApiAccount, chat: string, url: URL): Promise<Response> {
+  const query = parseQuery(url, SearchParams)
+  return Response.json(
+    account.searchChat({
+      chatJid: chat,
+      query: query.q,
+      limit: query.limit,
+      after: query.since === undefined ? undefined : query.since - 1,
+      before: query.until,
+      senderJid: query.sender,
+    }),
+  )
 }
 
 async function setPresence(account: ApiAccount, chat: string, request: Request): Promise<Response> {

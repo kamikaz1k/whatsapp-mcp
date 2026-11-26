@@ -131,6 +131,7 @@ Want a bot in your group chat? It gets every message through a [webhook](#webhoo
 | `GET /messages/:chat/:id/media`    | The file a message carries: a photo, video, voice note or document       |
 | `GET /chats`                       | Chats, filtered by `type=group` or `direct`                              |
 | `GET /chats/:chat/messages`        | Messages between `since` and `until`                                     |
+| `GET /chats/:chat/search?q=`       | Full-text search in one chat, best matches first, with a `snippet`       |
 | `POST /chats/:chat/presence`       | Shows `typing` or `recording` for about 25 seconds                       |
 | `POST /chats/:chat/read`           | Marks the chat as read                                                   |
 | `GET /groups/:jid`                 | A group and its members, with their phone numbers                        |

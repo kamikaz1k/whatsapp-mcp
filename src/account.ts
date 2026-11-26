@@ -589,6 +589,20 @@ export class WhatsAppAccount extends DurableObject<Env> {
     }
   }
 
+  /** Full-text search in one chat, best matches first, each message with its `snippet`. */
+  searchChat(query: SearchQuery & { readonly chatJid: string }): MessagesData {
+    const chatJid = this.resolveChat(query.chatJid)
+    const hits = this.searchMessages({ ...query, chatJid })
+    const self = this.self()
+    return {
+      chat: chatData(this.chatRef(chatJid)),
+      messages: hits.map((hit) => ({
+        ...messageData(hit, this.senderOf(hit), self),
+        snippet: hit.snippet,
+      })),
+    }
+  }
+
   /** One message in the shape webhooks carry it, or null when the archive lacks it. */
   async readMessage(
     chatJid: string,

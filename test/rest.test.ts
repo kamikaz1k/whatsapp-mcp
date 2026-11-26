@@ -33,6 +33,10 @@ function fakeAccount(overrides: Partial<ApiAccount> = {}) {
       "readMessages",
       Promise.resolve({ chat: { jid: GROUP }, messages: [{ id: "A" }] }),
     ),
+    searchChat: record("searchChat", {
+      chat: { jid: GROUP },
+      messages: [{ id: "A", snippet: "the [pizza] place" }],
+    }),
     listChats: record("listChats", [
       {
         jid: GROUP,
@@ -257,6 +261,27 @@ describe("REST API", () => {
       after: since - 1,
       before: since + 86_400,
     })
+  })
+
+  test("searches one chat", async () => {
+    const { account, calls } = fakeAccount()
+    const response = await call(
+      account,
+      "GET",
+      `/chats/${GROUP}/search?q=pizza&limit=5&until=2026-10-04T00:00:00Z`,
+    )
+    expect(await jsonOf(response)).toEqual({
+      chat: { jid: GROUP },
+      messages: [{ id: "A", snippet: "the [pizza] place" }],
+    })
+    expect(argsOf(calls, "searchChat")[0]).toMatchObject({
+      chatJid: GROUP,
+      query: "pizza",
+      limit: 5,
+      before: Date.parse("2026-10-04T00:00:00Z") / 1000,
+    })
+    const empty = await call(account, "GET", `/chats/${GROUP}/search?q=%20`)
+    expect(empty.status).toBe(400)
   })
 
   test("shows typing, and the group's members", async () => {
